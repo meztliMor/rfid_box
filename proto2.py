@@ -1,19 +1,23 @@
+import copy
+import json
 import nfc
 import nfc.ndef
-import copy
+
 import buttons
 
 class Comms(object):
     def __init__(self):
         self.PIN1 = 16
         self.b = buttons.Button(self.PIN1)
-        self.b.start()
-        print "button started"
 
     def pressed(self):
         val = self.b.pressed()
         print "Pressed: " + str(val)
         return val
+
+    def start(self):
+        self.b.start()
+        print "button started"
 
 
 class Board(object):
@@ -22,9 +26,29 @@ class Board(object):
         self.basket_q = {}
         self.todo_q = {}
         self.done_q = {}
-
+        self.queue_list = ["todo_q", "done_q", "basket_q"]
         self.comms = Comms()
+
+        # FIXME: let the path to be modified
+        self.dump_path = "queue_dump.json"
+
         print "Board init done"
+
+    def start(self):
+        self.comms.start()
+
+    def save_state(self):
+        with open(self.dump_path, "w") as f:
+            state = {k: getattr(self, k) for k in self.queue_list}
+            print state
+            json.dump(state)
+
+    def load_state(self):
+        with open(self.dump_path, "r") as f:
+            state = json.load(f)
+            print state
+            for k in self.queue_list:
+                setattr(self, k, state[k])
 
     def find_item(self, tag):
         key = get_tag_id(tag)
@@ -72,11 +96,12 @@ def test_pn532(tag):
     print tag
     return True
 
-if __name__ == "__main__":
+def run():
     try:
         board = Board()
         clf = start_reader()
         try:
+            board.start()
             print "start loop"
             while True:
                 #tag = clf.connect(rdwr={'on-connect': lambda tag: False})
@@ -95,3 +120,5 @@ if __name__ == "__main__":
         buttons.cleanup()
 
 
+if __name__ == "__main__":
+    run()
