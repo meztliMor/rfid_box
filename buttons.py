@@ -44,7 +44,7 @@ def run():
         time.sleep(0.5)
 
 def cleanup():
-    print "cleanup"
+    print "Buttons cleanup"
     GPIO.cleanup()
 
 
