@@ -1,10 +1,17 @@
 import copy
 import json
 import nfc
-import nfc.ndef
-import cPickle as pickle
+import ndef
+#import nfc.ndef
+#import cPickle as pickle
+from multiprocessing import Process, Lock, Condition
+import time
 
 import buttons
+import read_email as email
+
+#import logging as log
+#log.basicConfig(level=logging.DEBUG, format="(%threadName)-9s %(message)s",)
 
 class Comms(object):
     def __init__(self):
@@ -24,10 +31,14 @@ class Comms(object):
 class Board(object):
     def __init__(self):
         # TODO: load saved queues
-        self.basket_q = {}
+        self.staging_q = {} # while need a mutex
         self.todo_q = {}
         self.done_q = {}
-        self.queue_list = ["todo_q", "done_q", "basket_q"]
+        #TODO add basket to the file dump
+        #TODO: use ordered set
+        self.basket = set()
+        self.queue_list = ["todo_q", "done_q", "staging_q"]
+        self.q_mutex = Lock()
         self.comms = Comms()
 
         # FIXME: let the path to be modified
@@ -36,8 +47,14 @@ class Board(object):
         print "Board init done"
 
     def __str__(self):
-        return "Board(todo_q:{q1}, done_q{q2}, basket_q{q3})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), q3=json.dumps(self.basket_q))
+        #TODO: mutex for basket
+        return "Board(todo_q:{q1}, done_q{q2}, staging_q{q3}, basket{s1})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), q3=json.dumps(self.staging_q), l1=json.dumps(list(self.basket)))
 
+    def add_to_basket(self, tasks):
+        clean_tasks = [x.strip() for x in tasks]
+        with self.q_mutex:
+            self.basket.update(clean_tasks)
+            print "Basket: " + str(self.basket)
 
     def start(self):
         self.comms.start()
@@ -88,15 +105,18 @@ class Board(object):
         elif self.done_q.get(key):
             print "IN DONE"
             self.mark_todo(key)
-        elif self.basket_q.get(key):
-            print "In the basket"
-            print self.basket_q[key]
-        elif self.comms.pressed(): # if pressed, add to basket
-            #TODO: pickle and store entire Message or Record object
-            #self.basket_q[id] = copy.deepcopy(tag.ndef.message)
-            print "add to the basket"
-            self.basket_q[key] = copy.deepcopy(tag.ndef.records[0].text)
-            self.save_state()
+        elif self.staging_q.get(key):
+            print "In the staging"
+            print self.staging_q[key]
+        elif self.comms.pressed(): # if pressed, add to staging
+            ##TODO: pickle and store entire Message or Record object
+            ##self.staging_q[key] = copy.deepcopy(tag.ndef.records[0].text)
+            #self.add_to_staging(key, tag.ndef.records)
+            
+            print "Write to tag: ", self.basket
+            if len(self.basket):
+                self.write_tag(tag)
+                self.save_state()
         else: #ignore
             print "Button not pressed: ignoring"
         
@@ -109,10 +129,10 @@ class Board(object):
         self.save_state()
         return queue_b[key]
 
-    def move_basket_to_todo(self):
+    def move_staging_to_todo(self):
         #TODO: might need a mutex
-        self.todo_q.update(self.basket_q)
-        self.basket_q = {}
+        self.todo_q.update(self.staging_q)
+        self.staging_q = {}
         self.save_state()
 
     def mark_done(self, key):
@@ -123,6 +143,41 @@ class Board(object):
         val = self.move_item(key, self.done_q, self.todo_q)
         print "\t{d}: {v} - TODO".format(d=key, v=val)
 
+    def add_to_staging(self, key, records):
+        print "add to the staging"
+        self.staging_q[key] = copy.deepcopy(tag.ndef.records[0].text)
+
+    ######
+    # FIXME: sort out return values
+    def write_tag(self, tag):
+        record = None
+        task = None
+        try:
+            # TODO: if writing fails add the task back
+            task = self.basket.pop()
+            # TODO: do this when adding to the basket
+            record = self.create_record(task)
+        except Exception as e:
+            print e
+            return True
+        # TODO: should can it format tags too?
+        if tag.ndef is not None:
+            key = get_tag_id(tag)
+            tag.ndef.records = [record,]
+            if tag.ndef.has_changed:
+                # figure out how this works
+                print "Write succeful?"
+                # TODO: pass the string only
+            self.add_to_staging(key, tag.ndef.records)
+        return True
+
+    def create_record(self, t): 
+        #rec = nfc.ndef.Record("urn:nfc:wkt:T", "task", data=b"en{task}".format(task=t))
+        rec = ndef.Record("urn:nfc:wkt:T", data=b"en{task}".format(task=t))
+        #msg = nfc.ndef.Message()
+        #msg.append(rec)
+        print rec
+        return rec
 
 def start_reader():
     clf = nfc.ContactlessFrontend('tty:serial0:pn532')
@@ -140,14 +195,21 @@ def run():
     try:
         board = Board()
         board.load_state()
+        email_p = Process(target=email_loop, args=(board,))
+
         clf = start_reader()
         try:
+            email_p.start()
+            # TODO: move board to another process
             board.start()
+            board.add_to_basket(["Wash dishes"])
             print "start loop"
-            while True:
+            run = True
+            while run:
                 #tag = clf.connect(rdwr={'on-connect': lambda tag: False})
-                clf.connect(rdwr={'on-connect': board.find_item})
                 #clf.connect(rdwr={'on-connect': test_pn532})
+                # TODO: need to handle bad tag reads
+                run = clf.connect(rdwr={'on-connect': board.find_item})
 
             #print tag.ndef.records
             #nfc.ndef.Record
@@ -157,10 +219,34 @@ def run():
             #FIXME: make sure it's run on SIGKILL
             clf.close()
             board.save_state()
+            email_p.join()
     finally:
-        #FIXME: repalce this with sys.exceptionhook in buttons
+        #FIXME: replace this with sys.exceptionhook in buttons
         buttons.cleanup()
 
+def email_loop(board):
+    poll_interval = 60
+    # TODO: add graceful termination
+    while True:
+        print "check email"
+        tasks = email.get_from_gmail()
+        if len(tasks):
+            print "tasks: ", tasks
+            #TODO: handle lists of tasks
+            board.add_to_basket(tasks)
+        time.sleep(poll_interval)
+
+# FIMXE: clashes with nfcpy
+#RUN = True
+#import signal
+#def exit_gracefully():
+#    RUN = False
+#    signal.signal(signal.SIGINT, orignal_sigint)
+#
+#orignal_sigint = signal.getsignal(signal.SIGINT)
+#signal.signal(signal.SIGINT, exit_gracefully)
 
 if __name__ == "__main__":
+    # FIXME: use this to handl SIGINT
     run()
+
