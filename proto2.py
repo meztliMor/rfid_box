@@ -10,6 +10,9 @@ import time
 import buttons
 import read_email as email
 
+#from ../denis_lcd/RPi_I2C_driver as i2c_lcd
+import i2c_lcd
+
 #import logging as log
 #log.basicConfig(level=logging.DEBUG, format="(%threadName)-9s %(message)s",)
 
@@ -17,6 +20,9 @@ class Comms(object):
     def __init__(self):
         self.PIN1 = 16
         self.b = buttons.Button(self.PIN1)
+        self.lcd = i2c_lcd.lcd(0x3f)
+        self.lcd.lcd_clear()
+        self.lcd.lcd_display_string("TEST",1)
 
     def pressed(self):
         val = self.b.pressed()
@@ -102,9 +108,17 @@ class Board(object):
         if self.todo_q.get(key):
             print "In TODO"
             self.mark_done(key)
+            #FIXME: just testing move to another process
+            self.comms.lcd.lcd_clear()
+            self.comms.lcd.lcd_display_string(self.done_q[key], 1)
+            self.comms.lcd.lcd_display_string("DONE", 2)
         elif self.done_q.get(key):
             print "IN DONE"
             self.mark_todo(key)
+            #FIXME: just testing move to another process
+            self.comms.lcd.lcd_clear()
+            self.comms.lcd.lcd_display_string(self.todo_q[key], 1)
+            self.comms.lcd.lcd_display_string("TODO", 2)
         elif self.staging_q.get(key):
             print "In the staging"
             print self.staging_q[key]
