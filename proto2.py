@@ -41,21 +41,21 @@ class Comms(object):
 class Board(object):
     def __init__(self):
         self.mg = Manager()
-        self.staging_q = {} # might need a mutex
+        # TODO probably need to mutexes
+        self.staging_q = {}
         self.todo_q = {}
         self.done_q = {}
 
         #TODO add basket to the file dump
-        #TODO: use ordered set
         self.basket = self.mg.list()
-        self.queue_list = ["todo_q", "done_q", "staging_q", "basket"]
+        #self.queue_list = ["todo_q", "done_q", "staging_q", "basket"]
+        self.queue_list = ["todo_q", "done_q", "staging_q"]
         self.q_mutex = Lock()
         self.comms = Comms()
 
-        # FIXME: let the path to be modified
+        # TODO: let the path to be modified
         self.dump_path = "queue_dump.json"
 
-        #print "Board init done"
         log.debug("Board ctor finished")
 
     def __str__(self):
@@ -67,6 +67,7 @@ class Board(object):
         with self.q_mutex:
             #self.basket.update(clean_tasks)
             self.basket.extend(clean_tasks)
+            #log.debug("Add to basket", tasks)
             print "Basket: " + str(self.basket)
             self.save_state()
 
@@ -100,8 +101,9 @@ class Board(object):
                 state = json.load(f, object_hook=_conv_to_int)
                 # TODO fix __str__ and use it instead
                 log.debug("Board's state:\n" + json.dumps(state, indent=4))
-                for k in self.queue_list:
-                    setattr(self, k, state[k])
+                with self.q_mutex:
+                    for k in self.queue_list:
+                        setattr(self, k, state[k])
         except (IOError, ValueError) as e:
             self.clear_queues()
 
@@ -113,8 +115,11 @@ class Board(object):
         print "in find item"
         key = get_tag_id(tag)
         print "find item " + str(key)
-        # TODO: check if the task changes?
-        if self.todo_q.get(key):
+        if self.comms.pressed(): # if pressed, add to staging
+            # create task from basket
+            self.create_task(key, tag)
+        elif self.todo_q.get(key):
+            #TODO: check if someone messed with tags
             print "In TODO"
             self.mark_done(key)
             #FIXME: just testing move to another process
@@ -131,15 +136,12 @@ class Board(object):
         elif self.staging_q.get(key):
             print "In the staging"
             print self.staging_q[key]
-        elif self.comms.pressed(): # if pressed, add to staging
-            # create task from basket
-            self.add_task(key, tag)
         else: #ignore
             print "Button not pressed: ignoring"
         
         return True # wait for the removal of tag
 
-    def move_item(self, key, queue_a, queue_b):
+    def _move_item(self, key, queue_a, queue_b):
         # TODO: should it check for duplicates? and missing values?
         #TODO: might need a mutex
         queue_b[key] = queue_a.pop(key)
@@ -147,36 +149,54 @@ class Board(object):
         return queue_b[key]
 
     def move_staging_to_todo(self):
-        #TODO: might need a mutex
-        self.todo_q.update(self.staging_q)
-        self.staging_q = {}
-        self.save_state()
+        with self.q_mutex:
+            self.todo_q.update(self.staging_q)
+            self.staging_q = {}
+            self.save_state()
 
-    def make_todo(self, key): # rename
-        val = self.move_item(key, self.staging_q, self.todo_q)
+    def _make_todo(self, key): # rename
+        val = None
+        val = self._move_item(key, self.staging_q, self.todo_q)
         print "\t{d}: {v} - make TODO".format(d=key, v=val)
 
     def mark_done(self, key):
-        val = self.move_item(key, self.todo_q, self.done_q)
+        val = None
+        with self.q_mutex:
+            val = self._move_item(key, self.todo_q, self.done_q)
         print "\t{d}: {v} - DONE".format(d=key, v=val)
 
     def mark_todo(self, key):
-        val = self.move_item(key, self.done_q, self.todo_q)
+        val = None
+        with self.q_mutex:
+            val = self._move_item(key, self.done_q, self.todo_q)
         print "\t{d}: {v} - TODO".format(d=key, v=val)
 
-    def add_task(self, key, tag):
-        print "basket:", self.basket
-        if len(self.basket):
-            print "Has changed", tag.ndef.has_changed
-            if self.write_tag(tag):
-                # does it ever change?
+    def _delete_task(self, key):
+        def delitem(d, key):
+            if key in d:
+                del d[key]
+        delitem(self.todo_q, key)
+        delitem(self.done_q, key)
+        delitem(self.staging_q, key)
+        #self.save_state()
+
+    def create_task(self, key, tag):
+        print "Wait for qmutex"
+        with self.q_mutex:
+            print "basket:", self.basket
+            if len(self.basket):
+                self._delete_task(key)
                 print "Has changed", tag.ndef.has_changed
-                self.add_to_staging(key, tag)
-                self.make_todo(key)
+                if self.write_tag(tag):
+                    # does it ever change?
+                    print "Has changed", tag.ndef.has_changed
+                    # TODO: delete staging_q
+                    self.add_to_staging(key, tag)
+                    self._make_todo(key)
+                    self.save_state()
 
     def add_to_staging(self, key, tag):
-        print "add to the staging"
-        #TODO: pickle and store entire Message or Record object
+        print "add to staging"
         self.staging_q[key] = copy.deepcopy(tag.ndef.records[0].text)
 
     def write_tag(self, tag):
@@ -244,10 +264,6 @@ def get_tag_id(tag):
     # convert tag's ID (bytearray) to int
     return int(tag.identifier.encode("hex"), 16)
 
-def test_pn532(tag):
-    print tag
-    return True
-
 def run():
     try:
         board = Board()
@@ -256,9 +272,9 @@ def run():
 
         clf = start_reader()
         try:
+            board.start()
             email_p.start()
             # TODO: maybe move board to another process
-            board.start()
             log.debug("start main loop")
             run = True
             while run:
@@ -276,16 +292,24 @@ def run():
         buttons.cleanup()
 
 def email_loop(board):
-    poll_interval = 60
-    log.debug("Start email loop")
+    poll_interval = 20
+    log.debug("start email loop")
     # TODO: add graceful termination
     while True:
+        log.debug("check email")
         result = email.get_from_gmail()
         if len(result):
             tasks = re.split(",|;|\r\n", result[0])
-            #print "tasks: ", tasks
+            print "tasks: ", tasks
             board.add_to_basket(tasks)
         time.sleep(poll_interval)
+
+def screen_loop(b):
+    pass
+    #b.lcd.lcd_clear()
+    #b.lcd.lcd_display_string("TEST",1)
+    #board.lcd.
+    #while True:
 
 if __name__ == "__main__":
     # FIXME: use this to handl SIGINT
