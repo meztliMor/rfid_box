@@ -6,6 +6,7 @@ import nfc.ndef
 
 from multiprocessing import Process, Lock, Condition, Manager
 import time
+import re
 
 import buttons
 import read_email as email
@@ -25,7 +26,7 @@ class Comms(object):
         self.b = buttons.Button(self.PIN1)
         self.lcd = i2c_lcd.lcd(0x3f)
         self.lcd.lcd_clear()
-        self.lcd.lcd_display_string("TEST",1)
+        #self.lcd.lcd_display_string("TEST",1)
 
     def pressed(self):
         val = self.b.pressed()
@@ -155,7 +156,6 @@ class Board(object):
         val = self.move_item(key, self.staging_q, self.todo_q)
         print "\t{d}: {v} - make TODO".format(d=key, v=val)
 
-
     def mark_done(self, key):
         val = self.move_item(key, self.todo_q, self.done_q)
         print "\t{d}: {v} - DONE".format(d=key, v=val)
@@ -257,19 +257,13 @@ def run():
         clf = start_reader()
         try:
             email_p.start()
-            # TODO: move board to another process
+            # TODO: maybe move board to another process
             board.start()
-            #board.add_to_basket(["Wash dishes"])
             log.debug("start main loop")
             run = True
             while run:
-                #tag = clf.connect(rdwr={'on-connect': lambda tag: False})
-                #clf.connect(rdwr={'on-connect': test_pn532})
                 # TODO: need to handle bad tag reads
                 run = clf.connect(rdwr={'on-connect': board.find_item})
-
-            #print tag.ndef.records
-            #nfc.ndef.Record
         except Exception as e:
             print e
         finally:
@@ -283,17 +277,22 @@ def run():
 
 def email_loop(board):
     poll_interval = 60
+    log.debug("Start email loop")
     # TODO: add graceful termination
     while True:
-        #print "check email"
-        tasks = email.get_from_gmail()
-        if len(tasks):
-            print "tasks: ", tasks
-            #TODO: handle lists of tasks
+        result = email.get_from_gmail()
+        if len(result):
+            tasks = re.split(",|;|\r\n", result[0])
+            #print "tasks: ", tasks
             board.add_to_basket(tasks)
         time.sleep(poll_interval)
 
 if __name__ == "__main__":
     # FIXME: use this to handl SIGINT
-    run()
+    if 1:
+        run()
+    else: # test email loop
+        board = Board()
+        board.load_state()
+        email_loop(board)
 
