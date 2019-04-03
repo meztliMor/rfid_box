@@ -3,18 +3,20 @@ import json
 import nfc
 import ndef
 import nfc.ndef
-#import cPickle as pickle
+
 from multiprocessing import Process, Lock, Condition, Manager
 import time
 
 import buttons
 import read_email as email
-
-#from ../denis_lcd/RPi_I2C_driver as i2c_lcd
 import i2c_lcd
+#from ../denis_lcd/RPi_I2C_driver as i2c_lcd
 
-#import logging as log
-#log.basicConfig(level=logging.DEBUG, format="(%threadName)-9s %(message)s",)
+import logging
+#LOG_FORMAT = "(%threadName)-9s %(message)s"
+#logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
+logging.basicConfig(level=logging.DEBUG)
+log = logging.getLogger("proto")
 import pdb
 
 class Comms(object):
@@ -38,21 +40,22 @@ class Comms(object):
 class Board(object):
     def __init__(self):
         self.mg = Manager()
-        # TODO: load saved queues
-        self.staging_q = {} # while need a mutex
+        self.staging_q = {} # might need a mutex
         self.todo_q = {}
         self.done_q = {}
+
         #TODO add basket to the file dump
         #TODO: use ordered set
         self.basket = self.mg.list()
-        self.queue_list = ["todo_q", "done_q", "staging_q"]
+        self.queue_list = ["todo_q", "done_q", "staging_q", "basket"]
         self.q_mutex = Lock()
         self.comms = Comms()
 
         # FIXME: let the path to be modified
         self.dump_path = "queue_dump.json"
 
-        print "Board init done"
+        #print "Board init done"
+        log.debug("Board ctor finished")
 
     def __str__(self):
         #TODO: mutex for basket
@@ -64,6 +67,7 @@ class Board(object):
             #self.basket.update(clean_tasks)
             self.basket.extend(clean_tasks)
             print "Basket: " + str(self.basket)
+            self.save_state()
 
     def start(self):
         self.comms.start()
@@ -73,12 +77,11 @@ class Board(object):
             state = {k: getattr(self, k) for k in self.queue_list}
             print state
             json.dump(state, f)
-            #json.dump({k: getattr(self, k) for k in self.queue_list}, f)
 
     def load_state(self):
+        # modified version of a function found in https://stackoverflow.com/questions/45068797/how-to-convert-string-int-json-into-real-int-with-json-loads/45069099
         def _conv_to_int(o):
-            # modified version of a function found in https://stackoverflow.com/questions/45068797/how-to-convert-string-int-json-into-real-int-with-json-loads/45069099
-    # Note the "unicode" part is only for python2
+            # Note the "unicode" part is only for python2
             if isinstance(o, str) or isinstance(o, unicode):
                 try:
                     return int(o)
@@ -94,7 +97,8 @@ class Board(object):
         try:
             with open(self.dump_path, "r") as f:
                 state = json.load(f, object_hook=_conv_to_int)
-                print state
+                # TODO fix __str__ and use it instead
+                log.debug("Board's state:\n" + json.dumps(state, indent=4))
                 for k in self.queue_list:
                     setattr(self, k, state[k])
         except (IOError, ValueError) as e:
@@ -256,7 +260,7 @@ def run():
             # TODO: move board to another process
             board.start()
             #board.add_to_basket(["Wash dishes"])
-            print "start loop"
+            log.debug("start main loop")
             run = True
             while run:
                 #tag = clf.connect(rdwr={'on-connect': lambda tag: False})
@@ -281,7 +285,7 @@ def email_loop(board):
     poll_interval = 60
     # TODO: add graceful termination
     while True:
-        print "check email"
+        #print "check email"
         tasks = email.get_from_gmail()
         if len(tasks):
             print "tasks: ", tasks
