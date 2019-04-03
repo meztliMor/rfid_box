@@ -2,9 +2,9 @@ import copy
 import json
 import nfc
 import ndef
-#import nfc.ndef
+import nfc.ndef
 #import cPickle as pickle
-from multiprocessing import Process, Lock, Condition
+from multiprocessing import Process, Lock, Condition, Manager
 import time
 
 import buttons
@@ -15,6 +15,7 @@ import i2c_lcd
 
 #import logging as log
 #log.basicConfig(level=logging.DEBUG, format="(%threadName)-9s %(message)s",)
+import pdb
 
 class Comms(object):
     def __init__(self):
@@ -36,13 +37,14 @@ class Comms(object):
 
 class Board(object):
     def __init__(self):
+        self.mg = Manager()
         # TODO: load saved queues
         self.staging_q = {} # while need a mutex
         self.todo_q = {}
         self.done_q = {}
         #TODO add basket to the file dump
         #TODO: use ordered set
-        self.basket = set()
+        self.basket = self.mg.list()
         self.queue_list = ["todo_q", "done_q", "staging_q"]
         self.q_mutex = Lock()
         self.comms = Comms()
@@ -54,12 +56,13 @@ class Board(object):
 
     def __str__(self):
         #TODO: mutex for basket
-        return "Board(todo_q:{q1}, done_q{q2}, staging_q{q3}, basket{s1})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), q3=json.dumps(self.staging_q), l1=json.dumps(list(self.basket)))
+        return "Board(todo_q:{q1}, done_q{q2}, staging_q{q3}, basket{s1})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), q3=json.dumps(self.staging_q), l1=json.dumps(self.basket))
 
     def add_to_basket(self, tasks):
         clean_tasks = [x.strip() for x in tasks]
         with self.q_mutex:
-            self.basket.update(clean_tasks)
+            #self.basket.update(clean_tasks)
+            self.basket.extend(clean_tasks)
             print "Basket: " + str(self.basket)
 
     def start(self):
@@ -102,6 +105,7 @@ class Board(object):
             setattr(self, k, {})
 
     def find_item(self, tag):
+        print "in find item"
         key = get_tag_id(tag)
         print "find item " + str(key)
         # TODO: check if the task changes?
@@ -123,18 +127,12 @@ class Board(object):
             print "In the staging"
             print self.staging_q[key]
         elif self.comms.pressed(): # if pressed, add to staging
-            ##TODO: pickle and store entire Message or Record object
-            ##self.staging_q[key] = copy.deepcopy(tag.ndef.records[0].text)
-            #self.add_to_staging(key, tag.ndef.records)
-            
-            print "Write to tag: ", self.basket
-            if len(self.basket):
-                self.write_tag(tag)
-                self.save_state()
+            # create task from basket
+            self.add_task(key, tag)
         else: #ignore
             print "Button not pressed: ignoring"
         
-        return True
+        return True # wait for the removal of tag
 
     def move_item(self, key, queue_a, queue_b):
         # TODO: should it check for duplicates? and missing values?
@@ -149,6 +147,11 @@ class Board(object):
         self.staging_q = {}
         self.save_state()
 
+    def make_todo(self, key): # rename
+        val = self.move_item(key, self.staging_q, self.todo_q)
+        print "\t{d}: {v} - make TODO".format(d=key, v=val)
+
+
     def mark_done(self, key):
         val = self.move_item(key, self.todo_q, self.done_q)
         print "\t{d}: {v} - DONE".format(d=key, v=val)
@@ -157,37 +160,73 @@ class Board(object):
         val = self.move_item(key, self.done_q, self.todo_q)
         print "\t{d}: {v} - TODO".format(d=key, v=val)
 
-    def add_to_staging(self, key, records):
+    def add_task(self, key, tag):
+        print "basket:", self.basket
+        if len(self.basket):
+            print "Has changed", tag.ndef.has_changed
+            if self.write_tag(tag):
+                # does it ever change?
+                print "Has changed", tag.ndef.has_changed
+                self.add_to_staging(key, tag)
+                self.make_todo(key)
+
+    def add_to_staging(self, key, tag):
         print "add to the staging"
+        #TODO: pickle and store entire Message or Record object
         self.staging_q[key] = copy.deepcopy(tag.ndef.records[0].text)
 
-    ######
-    # FIXME: sort out return values
     def write_tag(self, tag):
-        record = None
+        # FIXME: sort out return values
+        print "IN write_tag"
+
+        if tag.ndef is None:
+            print "This is not an NDEF Tag."
+            return False
+
+        if not tag.ndef.is_writeable:
+            print "This Tag is not writeable."
+            return False
+
         task = None
+        new_msg = None
+
+        task = self.basket[0]
+        new_msg = self.create_msg([task])
+
+        if new_msg is None:
+            print "Msg is empty"
+            return False
+
+        if new_msg == tag.ndef.message:
+            print "The Tag already contains the message to write."
+
+        if len(str(new_msg)) > tag.ndef.capacity:
+            print "The new message exceeds the Tag's capacity."
+            return False
+
         try:
-            # TODO: if writing fails add the task back
-            task = self.basket.pop()
-            # TODO: do this when adding to the basket
-            record = self.create_record(task)
+            print "Old message:", tag.ndef.message.pretty()
+            tag.ndef.message = new_msg
         except Exception as e:
             print e
-            return True
-        # TODO: should can it format tags too?
-        if tag.ndef is not None:
-            key = get_tag_id(tag)
-            tag.ndef.records = [record,]
-            if tag.ndef.has_changed:
-                # figure out how this works
-                print "Write succeful?"
-                # TODO: pass the string only
-            self.add_to_staging(key, tag.ndef.records)
+            return False
+
+        self.basket.pop(0)
+        print "New message:"
+        print tag.ndef.message.pretty()
+        print "Written"
         return True
 
+    def create_msg(self, tasks):
+        print "create msg"
+        new_msg = nfc.ndef.Message()
+        for t in tasks:
+            new_msg.append(self.create_record(t))
+        print "msg made"
+        return new_msg
+
     def create_record(self, t): 
-        #rec = nfc.ndef.Record("urn:nfc:wkt:T", "task", data=b"en{task}".format(task=t))
-        rec = ndef.Record("urn:nfc:wkt:T", data=b"en{task}".format(task=t))
+        rec = nfc.ndef.TextRecord(text=t)
         #msg = nfc.ndef.Message()
         #msg.append(rec)
         print rec
@@ -216,7 +255,7 @@ def run():
             email_p.start()
             # TODO: move board to another process
             board.start()
-            board.add_to_basket(["Wash dishes"])
+            #board.add_to_basket(["Wash dishes"])
             print "start loop"
             run = True
             while run:
@@ -249,16 +288,6 @@ def email_loop(board):
             #TODO: handle lists of tasks
             board.add_to_basket(tasks)
         time.sleep(poll_interval)
-
-# FIMXE: clashes with nfcpy
-#RUN = True
-#import signal
-#def exit_gracefully():
-#    RUN = False
-#    signal.signal(signal.SIGINT, orignal_sigint)
-#
-#orignal_sigint = signal.getsignal(signal.SIGINT)
-#signal.signal(signal.SIGINT, exit_gracefully)
 
 if __name__ == "__main__":
     # FIXME: use this to handl SIGINT
