@@ -2,8 +2,7 @@ import RPi.GPIO as GPIO
 import time
 from multiprocessing import Process, Lock, Value
 import logging
-logging.basicConfig(level=logging.DEBUG)
-log = logging.getLogger("btn")
+log = logging.getLogger(__name__)
 
 GPIO.setmode(GPIO.BOARD)
 
@@ -59,6 +58,7 @@ def cleanup():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     PIN1 = 16
     b1 = Button(PIN1)
     b1.start()
