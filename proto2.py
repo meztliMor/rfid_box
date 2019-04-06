@@ -15,10 +15,10 @@ import i2c_lcd
 #from ../denis_lcd/RPi_I2C_driver as i2c_lcd
 
 import logging
-#LOG_FORMAT = "(%threadName)-9s %(message)s"
-#logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
-logging.basicConfig(level=logging.DEBUG)
-log = logging.getLogger("proto")
+LOG_FORMAT = "%(process)d %(levelname)s:%(name)s:%(funcName)s:%(message)s"
+logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
+log = logging.getLogger(__name__)
+
 import pdb
 import traceback
 
@@ -148,13 +148,13 @@ class Board(object):
             print "In the staging"
             print self.staging_q[key]
         else: #ignore
-            print "Button not pressed: ignoring"
+            log.debug("New tag - ignoring")
+            self.comms.show_text(["Empty tag", "Press btn to add"])
         
         return True # wait for the removal of tag
 
     def _move_item(self, key, queue_a, queue_b):
         # TODO: should it check for duplicates? and missing values?
-        #TODO: might need a mutex
         queue_b[key] = queue_a.pop(key)
         self.save_state()
         return queue_b[key]
@@ -165,7 +165,7 @@ class Board(object):
             self.staging_q = {}
             self.save_state()
 
-    def _make_todo(self, key): # rename
+    def _make_todo(self, key): # TODO: rename
         val = None
         val = self._move_item(key, self.staging_q, self.todo_q)
         print "\t{d}: {v} - make TODO".format(d=key, v=val)
@@ -212,6 +212,7 @@ class Board(object):
 
     def write_tag(self, tag):
         # FIXME: sort out return values
+        # clean-up this function
         print "IN write_tag"
 
         if tag.ndef is None:
