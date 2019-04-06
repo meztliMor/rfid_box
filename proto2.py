@@ -74,17 +74,17 @@ class Board(object):
         log.debug("Board ctor finished")
 
     def __str__(self):
-        #TODO: mutex for basket
+        #TODO: mutex for basket - check if it doesnt deadlock with mutex
+        #with self.q_mutex:
         return "Board(todo_q:{q1}, done_q{q2}, staging_q{q3}, basket{s1})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), q3=json.dumps(self.staging_q), l1=json.dumps(self.basket))
 
     def add_to_basket(self, tasks):
         clean_tasks = [x.strip() for x in tasks]
         with self.q_mutex:
-            #self.basket.update(clean_tasks)
             self.basket.extend(clean_tasks)
-            #log.debug("Add to basket", tasks)
-            print "Basket: " + str(self.basket)
+            log.debug("%s", tasks)
             self.save_state()
+        self.comms.lcd_evt.set()
 
     def start(self):
         self.comms.start()
@@ -114,7 +114,7 @@ class Board(object):
         try:
             with open(self.dump_path, "r") as f:
                 state = json.load(f, object_hook=_conv_to_int)
-                # TODO fix __str__ and use it instead
+                # TODO fix __str__ and use it instead -- or no, could deadlock
                 log.debug("Board's state:\n" + json.dumps(state, indent=4))
                 with self.q_mutex:
                     for k in self.queue_list:
@@ -137,19 +137,26 @@ class Board(object):
             #TODO: check if someone messed with tags
             log.debug("In TODO")
             self.mark_done(key)
-            self.comms.show_text([self.done_q[key], "DONE"])
         elif self.done_q.get(key):
             log.debug("In DONE")
             self.mark_todo(key)
-            self.comms.show_text([self.todo_q[key], "TODO"])
-        elif self.staging_q.get(key): #TODO: remove staging queue
-            print "In the staging"
-            print self.staging_q[key]
+        #elif self.staging_q.get(key): #TODO: remove staging queue
+        #    print "In the staging"
+        #    print self.staging_q[key]
         else: #ignore
             log.debug("ignoring new tag")
             self.comms.show_text(["Empty tag", "Press btn to add"])
         
         return True # wait for the removal of tag
+
+    def _add_to_todo(self, key, tag):
+        log.debug("tag: %s", tag)
+        val = copy.deepcopy(tag.ndef.records[0].text)
+        self.todo_q[key] = val 
+        self.save_state()
+        log.debug("\t{d}: {v} - create TODO".format(d=key, v=val))
+        #TODO: should not this be called when mutex is unlocked?
+        self.comms.show_text([val, "TODO"])
 
     def _move_item(self, key, queue_a, queue_b):
         # TODO: should it check for duplicates? and missing values?
@@ -157,27 +164,18 @@ class Board(object):
         self.save_state()
         return queue_b[key]
 
-    def move_staging_to_todo(self):
-        with self.q_mutex:
-            self.todo_q.update(self.staging_q)
-            self.staging_q = {}
-            self.save_state()
-
-    def _make_todo(self, key): # TODO: rename
-        val = None
-        val = self._move_item(key, self.staging_q, self.todo_q)
-        log.debug("\t{d}: {v} - make TODO".format(d=key, v=val))
-
     def mark_done(self, key):
         val = None
         with self.q_mutex:
             val = self._move_item(key, self.todo_q, self.done_q)
+        self.comms.show_text([val, "DONE"])
         log.debug("\t{d}: {v} - DONE".format(d=key, v=val))
 
     def mark_todo(self, key):
         val = None
         with self.q_mutex:
             val = self._move_item(key, self.done_q, self.todo_q)
+        self.comms.show_text([val, "TODO"])
         log.debug("\t{d}: {v} - TODO".format(d=key, v=val))
 
     def _delete_task(self, key):
@@ -190,66 +188,56 @@ class Board(object):
         #self.save_state()
 
     def create_task(self, key, tag):
-        print "Wait for qmutex"
+        #log.debug("wait for q_mutex")
         with self.q_mutex:
-            print "basket:", self.basket
             if len(self.basket):
+                log.debug("basket: %s", self.basket)
                 self._delete_task(key)
-                print "Has changed", tag.ndef.has_changed
-                if self.write_tag(tag):
+                #print "Has changed", tag.ndef.has_changed
+                if self._write_tag(tag):
                     # does it ever change?
-                    print "Has changed", tag.ndef.has_changed
-                    # TODO: delete staging_q
-                    self.add_to_staging(key, tag)
-                    self._make_todo(key)
-                    self.save_state()
+                    #print "Has changed", tag.ndef.has_changed
+                    self._add_to_todo(key,tag)
+            else:
+                log.debug("cannot create task from empty basket")
 
-    def add_to_staging(self, key, tag):
-        print "add to staging"
-        self.staging_q[key] = copy.deepcopy(tag.ndef.records[0].text)
-
-    def write_tag(self, tag):
+    def _write_tag(self, tag):
         # FIXME: sort out return values
-        # clean-up this function
         log.debug("%s", tag)
-        #print "IN write_tag"
 
         if tag.ndef is None:
-            print "This is not an NDEF Tag."
+            log.info("This is not an NDEF Tag.")
             return False
 
         if not tag.ndef.is_writeable:
-            print "This Tag is not writeable."
+            log.info("This Tag is not writeable.")
             return False
 
-        task = None
         new_msg = None
 
         task = self.basket[0]
         new_msg = self.create_msg([task])
 
         if new_msg is None:
-            print "Msg is empty"
+            log.warning("Msg is empty")
             return False
 
         if new_msg == tag.ndef.message:
-            print "The Tag already contains the message to write."
+            log.warning("The Tag already contains the message to write.")
 
         if len(str(new_msg)) > tag.ndef.capacity:
-            print "The new message exceeds the Tag's capacity."
+            log.warn("The new message exceeds the Tag's capacity.")
             return False
 
         try:
-            print "Old message:", tag.ndef.message.pretty()
+            log.debug("Old message: %s", tag.ndef.message.pretty())
             tag.ndef.message = new_msg
         except Exception as e:
-            print e
+            log.error(e)
             return False
 
         self.basket.pop(0)
-        print "New message:"
-        print tag.ndef.message.pretty()
-        print "Written"
+        log.debug("New message: %s", tag.ndef.message.pretty())
         return True
 
     def create_msg(self, tasks):
@@ -287,11 +275,11 @@ def email_loop(board):
     log.debug("start email loop")
     # TODO: add graceful termination
     while True:
-        log.debug("check email")
+        #log.debug("check email")
         result = email.get_from_gmail()
         if len(result):
             tasks = re.split(",|;|\r\n", result[0])
-            print "tasks: ", tasks
+            log.debug("tasks: %s", tasks)
             board.add_to_basket(tasks)
         time.sleep(poll_interval)
 
@@ -305,7 +293,7 @@ def screen_loop(board):
                 lcd.lcd_display_string("Create tag:", 1)
                 lcd.lcd_display_string(task, 2)
             else:
-                lcd.lcd_display_string("Basket empty", 1)
+                lcd.lcd_display_string("Basket is empty", 1)
                 lcd.lcd_display_string("add some tasks", 2)
         
     log.debug("start lcd loop")
@@ -330,13 +318,11 @@ def screen_loop(board):
         show_mode(board.comms.pressed())
 
         try:
-            #mode, cmds, dur = board.comms.lcd_mq.get()
             m, lines, dur = board.comms.lcd_mq.get_nowait()
         except QueueEmpty as e:
             #traceback.print_exc()
             dur = None
         else:
-            # can I clear only one line easily?
             lcd.lcd_clear()
             for text, idx in lines:
                 lcd.lcd_display_string(text, idx)
