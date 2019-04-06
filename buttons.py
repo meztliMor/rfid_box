@@ -1,29 +1,39 @@
 import RPi.GPIO as GPIO
 import time
-from multiprocessing import Process, Lock
+from multiprocessing import Process, Lock, Value
+import logging
+logging.basicConfig(level=logging.DEBUG)
+log = logging.getLogger("btn")
 
 GPIO.setmode(GPIO.BOARD)
 
 class Button(object):
-    def __init__(self, pin):
-        self.mutex = Lock()
-        self.pin = pin
-        GPIO.setup(self.pin, GPIO.IN)
-        self._pressed = False
-
-    def toggle(self, pin):
-        print "Toggle "
-        with self.mutex:
-            self._pressed = self._pressed ^ True
-        print "Toggled " + str(self._pressed)
-    
-    def pressed(self):
-        with self.mutex:
-            return self._pressed
+    def __init__(self, pin, cb=None):
+        self._pin = pin
+        self._pressed = Value("b", False, lock=False)
+        self._mutex = Lock()
+        self._cb = cb
+        GPIO.setup(self._pin, GPIO.IN)
 
     def start(self):
         # what does exactly GPIO.BOTH do?
-        GPIO.add_event_detect(self.pin, GPIO.RISING, callback=self.toggle, bouncetime=500)
+        #GPIO.add_event_detect(self._pin, GPIO.RISING, callback=self.toggle, bouncetime=500)
+        GPIO.add_event_detect(self._pin, GPIO.RISING, callback=self._callback, bouncetime=500)
+
+    def _callback(self, pin):
+        with self._mutex:
+            self._toggle(pin)
+            if self._cb is not None:
+                log.debug("custom callback")
+                self._cb(self._pressed.value)
+
+    def _toggle(self, pin):
+        self._pressed.value = self._pressed.value ^ True
+        log.debug("toggled:{v}".format(v=self._pressed.value))
+    
+    def pressed(self):
+        with self._mutex:
+            return self._pressed.value
 
 #def setup_pins():
 #    GPIO.setup(BUTTON1, GPIO.IN)
