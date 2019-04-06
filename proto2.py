@@ -69,7 +69,6 @@ class Board(object):
         self.queue_list = ["todo_q", "done_q", "staging_q"]
         self.q_mutex = Lock()
         self.comms = Comms()
-
         self.dump_path = "queue_dump.json"
 
         log.debug("Board ctor finished")
@@ -167,19 +166,19 @@ class Board(object):
     def _make_todo(self, key): # TODO: rename
         val = None
         val = self._move_item(key, self.staging_q, self.todo_q)
-        print "\t{d}: {v} - make TODO".format(d=key, v=val)
+        log.debug("\t{d}: {v} - make TODO".format(d=key, v=val))
 
     def mark_done(self, key):
         val = None
         with self.q_mutex:
             val = self._move_item(key, self.todo_q, self.done_q)
-        print "\t{d}: {v} - DONE".format(d=key, v=val)
+        log.debug("\t{d}: {v} - DONE".format(d=key, v=val))
 
     def mark_todo(self, key):
         val = None
         with self.q_mutex:
             val = self._move_item(key, self.done_q, self.todo_q)
-        print "\t{d}: {v} - TODO".format(d=key, v=val)
+        log.debug("\t{d}: {v} - TODO".format(d=key, v=val))
 
     def _delete_task(self, key):
         def delitem(d, key):
@@ -268,6 +267,12 @@ class Board(object):
         print rec
         return rec
 
+    def next_new_task(self):
+        with self.q_mutex:
+            if len(self.basket):
+                return self.basket[0]
+            return None
+
 def start_reader():
     clf = nfc.ContactlessFrontend('tty:serial0:pn532')
     return clf
@@ -295,8 +300,13 @@ def screen_loop(board):
     def show_mode(mode):
         lcd.lcd_clear()
         if mode:
-            lcd.lcd_display_string("Create tag:", 1)
-            lcd.lcd_display_string("<task>", 2)
+            task = board.next_new_task()
+            if task is not None:
+                lcd.lcd_display_string("Create tag:", 1)
+                lcd.lcd_display_string(task, 2)
+            else:
+                lcd.lcd_display_string("Basket empty", 1)
+                lcd.lcd_display_string("add some tasks", 2)
         
     log.debug("start lcd loop")
     lcd.lcd_clear()
