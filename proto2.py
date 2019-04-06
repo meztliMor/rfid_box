@@ -4,7 +4,8 @@ import nfc
 import ndef
 import nfc.ndef
 
-from multiprocessing import Process, Lock, Condition, Manager
+from multiprocessing import Process, Lock, Queue, Event, Manager
+from Queue import Empty as QueueEmpty
 import time
 import re
 
@@ -19,35 +20,51 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger("proto")
 import pdb
+import traceback
+
+# should move to main?
+sm_manager = Manager()
 
 class Comms(object):
     def __init__(self):
         self.PIN1 = 16
-        self.b = buttons.Button(self.PIN1)
+        self.b = buttons.Button(self.PIN1, cb=self.set_btn_evt)
         self.lcd = i2c_lcd.lcd(0x3f)
         self.lcd.lcd_clear()
-        #self.lcd.lcd_display_string("TEST",1)
+        self.lcd_mq = Queue()
+        self.lcd_evt = Event()
+
+    def set_btn_evt(self, val):
+        self.lcd_evt.set()
+
+    def show_text(self, text=None, dur=2):
+        cmd = None
+        mode = 1
+        lines = []
+        for i, t in enumerate(text):
+            lines.append((t, i+1))
+            
+        cmd = (mode, lines, dur)
+        self.lcd_mq.put(cmd)
+        self.lcd_evt.set()
 
     def pressed(self):
-        val = self.b.pressed()
-        print "Pressed: " + str(val)
-        return val
+        return self.b.pressed()
 
     def start(self):
         self.b.start()
-        print "button started"
+        log.debug("button started")
 
 
 class Board(object):
     def __init__(self):
-        self.mg = Manager()
-        # TODO probably need to mutexes
+        # TODO probably need two mutexes
         self.staging_q = {}
         self.todo_q = {}
         self.done_q = {}
 
         #TODO add basket to the file dump
-        self.basket = self.mg.list()
+        self.basket = sm_manager.list()
         #self.queue_list = ["todo_q", "done_q", "staging_q", "basket"]
         self.queue_list = ["todo_q", "done_q", "staging_q"]
         self.q_mutex = Lock()
@@ -112,27 +129,21 @@ class Board(object):
             setattr(self, k, {})
 
     def find_item(self, tag):
-        print "in find item"
         key = get_tag_id(tag)
-        print "find item " + str(key)
-        if self.comms.pressed(): # if pressed, add to staging
+        print "find_item " + str(key)
+
+        if self.comms.pressed():
             # create task from basket
             self.create_task(key, tag)
         elif self.todo_q.get(key):
             #TODO: check if someone messed with tags
-            print "In TODO"
+            log.debug("In TODO")
             self.mark_done(key)
-            #FIXME: just testing move to another process
-            self.comms.lcd.lcd_clear()
-            self.comms.lcd.lcd_display_string(self.done_q[key], 1)
-            self.comms.lcd.lcd_display_string("DONE", 2)
+            self.comms.show_text([self.done_q[key], "DONE"])
         elif self.done_q.get(key):
-            print "IN DONE"
+            log.debug("In DONE")
             self.mark_todo(key)
-            #FIXME: just testing move to another process
-            self.comms.lcd.lcd_clear()
-            self.comms.lcd.lcd_display_string(self.todo_q[key], 1)
-            self.comms.lcd.lcd_display_string("TODO", 2)
+            self.comms.show_text([self.todo_q[key], "TODO"])
         elif self.staging_q.get(key):
             print "In the staging"
             print self.staging_q[key]
@@ -264,15 +275,72 @@ def get_tag_id(tag):
     # convert tag's ID (bytearray) to int
     return int(tag.identifier.encode("hex"), 16)
 
+
+def email_loop(board):
+    poll_interval = 20
+    log.debug("start email loop")
+    # TODO: add graceful termination
+    while True:
+        log.debug("check email")
+        result = email.get_from_gmail()
+        if len(result):
+            tasks = re.split(",|;|\r\n", result[0])
+            print "tasks: ", tasks
+            board.add_to_basket(tasks)
+        time.sleep(poll_interval)
+
+def screen_loop(board):
+    lcd = board.comms.lcd
+    def show_mode(mode):
+        lcd.lcd_clear()
+        if mode:
+            lcd.lcd_display_string("Create tag:", 1)
+            lcd.lcd_display_string("<task>", 2)
+        
+    log.debug("Start lcd loop")
+    lcd.lcd_clear()
+    lcd.lcd_display_string("Starting-up", 1)
+    lcd.lcd_display_string("board", 2)
+    time.sleep(2)
+    show_mode(board.comms.pressed())
+
+    dur = None
+    while True:
+        # if dur is None and timed out then waited == False
+        waited = board.comms.lcd_evt.wait(dur) # waited
+        board.comms.lcd_evt.clear() # waited
+        if dur is not None and waited:
+            log.debug("evt waited for {t}".format(t=dur))
+        elif not waited:
+            log.debug("evt timed out")
+        else:
+            log.debug("evt obtained")
+
+        show_mode(board.comms.pressed())
+
+        try:
+            #mode, cmds, dur = board.comms.lcd_mq.get()
+            m, lines, dur = board.comms.lcd_mq.get_nowait()
+        except QueueEmpty as e:
+            #traceback.print_exc()
+            dur = None
+        else:
+            # can I clear only one line easily?
+            lcd.lcd_clear()
+            for text, idx in lines:
+                lcd.lcd_display_string(text, idx)
+
 def run():
     try:
         board = Board()
         board.load_state()
         email_p = Process(target=email_loop, args=(board,))
+        screen_p = Process(target=screen_loop, args=(board,))
 
         clf = start_reader()
         try:
             board.start()
+            screen_p.start()
             email_p.start()
             # TODO: maybe move board to another process
             log.debug("start main loop")
@@ -290,26 +358,6 @@ def run():
     finally:
         #FIXME: replace this with sys.exceptionhook in buttons
         buttons.cleanup()
-
-def email_loop(board):
-    poll_interval = 20
-    log.debug("start email loop")
-    # TODO: add graceful termination
-    while True:
-        log.debug("check email")
-        result = email.get_from_gmail()
-        if len(result):
-            tasks = re.split(",|;|\r\n", result[0])
-            print "tasks: ", tasks
-            board.add_to_basket(tasks)
-        time.sleep(poll_interval)
-
-def screen_loop(b):
-    pass
-    #b.lcd.lcd_clear()
-    #b.lcd.lcd_display_string("TEST",1)
-    #board.lcd.
-    #while True:
 
 if __name__ == "__main__":
     # FIXME: use this to handl SIGINT
