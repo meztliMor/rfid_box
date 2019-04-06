@@ -15,7 +15,7 @@ import i2c_lcd
 #from ../denis_lcd/RPi_I2C_driver as i2c_lcd
 
 import logging
-LOG_FORMAT = "%(process)d %(levelname)s:%(name)s:%(funcName)s:%(message)s"
+LOG_FORMAT = "%(process)d %(levelname)s:%(name)s:%(funcName)s %(message)s"
 logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
 log = logging.getLogger(__name__)
 
@@ -70,7 +70,6 @@ class Board(object):
         self.q_mutex = Lock()
         self.comms = Comms()
 
-        # TODO: let the path to be modified
         self.dump_path = "queue_dump.json"
 
         log.debug("Board ctor finished")
@@ -130,7 +129,7 @@ class Board(object):
 
     def find_item(self, tag):
         key = get_tag_id(tag)
-        print "find_item " + str(key)
+        log.debug("tag ID:%s", str(key))
 
         if self.comms.pressed():
             # create task from basket
@@ -144,11 +143,11 @@ class Board(object):
             log.debug("In DONE")
             self.mark_todo(key)
             self.comms.show_text([self.todo_q[key], "TODO"])
-        elif self.staging_q.get(key):
+        elif self.staging_q.get(key): #TODO: remove staging queue
             print "In the staging"
             print self.staging_q[key]
         else: #ignore
-            log.debug("New tag - ignoring")
+            log.debug("ignoring new tag")
             self.comms.show_text(["Empty tag", "Press btn to add"])
         
         return True # wait for the removal of tag
@@ -213,7 +212,8 @@ class Board(object):
     def write_tag(self, tag):
         # FIXME: sort out return values
         # clean-up this function
-        print "IN write_tag"
+        log.debug("%s", tag)
+        #print "IN write_tag"
 
         if tag.ndef is None:
             print "This is not an NDEF Tag."
@@ -298,7 +298,7 @@ def screen_loop(board):
             lcd.lcd_display_string("Create tag:", 1)
             lcd.lcd_display_string("<task>", 2)
         
-    log.debug("Start lcd loop")
+    log.debug("start lcd loop")
     lcd.lcd_clear()
     lcd.lcd_display_string("Starting-up", 1)
     lcd.lcd_display_string("board", 2)
