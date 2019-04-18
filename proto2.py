@@ -293,8 +293,11 @@ def screen_loop(board):
                 lcd.lcd_display_string("Create tag:", 1)
                 lcd.lcd_display_string(task, 2)
             else:
-                lcd.lcd_display_string("Basket is empty", 1)
-                lcd.lcd_display_string("add some tasks", 2)
+                lcd.lcd_display_string("Queue is empty", 1)
+                lcd.lcd_display_string("Add tasks via @", 2)
+        else:
+            lcd.lcd_display_string("Ready to read", 1)
+
         
     log.debug("start lcd loop")
     lcd.lcd_clear()
