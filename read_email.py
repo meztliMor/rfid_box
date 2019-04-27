@@ -4,11 +4,19 @@ import time
 import imaplib
 import email
 
-ORG_EMAIL   = "***REMOVED***"
-FROM_EMAIL  = "***REMOVED***" + ORG_EMAIL
-FROM_PWD    = "***REMOVED***"
-SMTP_SERVER = "***REMOVED***"
-SMTP_PORT   = 993
+import ConfigParser, os
+
+# FIXME: move these to a config file - use configparser
+#ORG_EMAIL   = "***REMOVED***"
+#FROM_EMAIL  = "***REMOVED***" + ORG_EMAIL
+#FROM_PWD    = "***REMOVED***"
+#SMTP_SERVER = "***REMOVED***"
+#SMTP_PORT   = 993
+
+class ConfigStruct:
+    #https://stackoverflow.com/questions/1305532/convert-nested-python-dict-to-object
+    def __init__(self, **entries):
+        self.__dict__.update(entries)
 
 # -------------------------------------------------
 #
@@ -16,59 +24,72 @@ SMTP_PORT   = 993
 #
 # ------------------------------------------------
 
-def get_from_gmail(filter="Task"):
-    mails = []
-    try:
-        mail = imaplib.IMAP4_SSL(SMTP_SERVER)
-        mail.login(FROM_EMAIL,FROM_PWD)
-        mail.select('inbox')
+class Email(object):
+    def __init__(self, cfg_path="account.cfg"):
+        self.cfg = None
+        config = ConfigParser.SafeConfigParser(allow_no_value=False)
+        with open("account.cfg") as f:
+            config.readfp(f)
+            section = "email"
+            if section in config._sections:
+                self.cfg = ConfigStruct(**config._sections[section])
 
-        #type, data = mail.search(None, 'ALL')
-        type, data = mail.search(None, 'UNSEEN')
-        #print data
-        mail_ids = data[0]
-        id_list = [int(i) for i in mail_ids.split()]
 
-        #for i in range(latest_email_id,first_email_id, -1):
-        for i in id_list:
-            #print "email id %d" % (i,)
-            typ, data = mail.fetch(i, '(RFC822)' )
-            #print typ, data
+    def get_from_gmail(self, filter="Task"):
+        mails = []
+        try:
+            mail = imaplib.IMAP4_SSL(self.cfg.smtp_server)
+            mail.login(self.cfg.from_email, self.cfg.from_pwd)
+            mail.select('inbox')
 
-            for response_part in data:
-                if isinstance(response_part, tuple):
-                    msg = email.message_from_string(response_part[1])
-                    email_subject = msg['subject']
-                    email_from = msg['from']
-                    if email_subject == filter:
-                        #print 'From : ' + email_from
-                        #print 'Subject : ' + email_subject
-                        body = get_email_body(msg).strip()
-                        if body:
-                            #print body
-                            mails.append(body)
+            #type, data = mail.search(None, 'ALL')
+            type, data = mail.search(None, 'UNSEEN')
+            #print data
+            mail_ids = data[0]
+            id_list = [int(i) for i in mail_ids.split()]
 
-            # todo: get unread and then mark as read
-    except Exception, e:
-        print str(e)
-    return mails
+            #for i in range(latest_email_id,first_email_id, -1):
+            for i in id_list:
+                #print "email id %d" % (i,)
+                typ, data = mail.fetch(i, '(RFC822)' )
+                #print typ, data
 
-# https://stackoverflow.com/questions/17874360/python-how-to-parse-the-body-from-a-raw-email-given-that-raw-email-does-not
-def get_email_body(b):
-    body = ""
-    if b.is_multipart():
-        for part in b.walk():
-            ctype = part.get_content_type()
-            cdispo = str(part.get('Content-Disposition'))
+                for response_part in data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_string(response_part[1])
+                        email_subject = msg['subject']
+                        email_from = msg['from']
+                        if email_subject == filter:
+                            print 'From : ' + email_from
+                            print 'Subject : ' + email_subject
+                            body = self.get_email_body(msg).strip()
+                            if body:
+                                #print body
+                                mails.append(body)
 
-            # skip any text/plain (txt) attachments
-            if ctype == 'text/plain' and 'attachment' not in cdispo:
-                body = part.get_payload(decode=True)  # decode
-                break
-    # not multipart - i.e. plain text, no attachments, keeping fingers crossed
-    else:
-        body = b.get_payload(decode=True)
-    return body
+                # todo: get unread and then mark as read
+        except Exception, e:
+            print str(e)
+        return mails
+
+    # https://stackoverflow.com/questions/17874360/python-how-to-parse-the-body-from-a-raw-email-given-that-raw-email-does-not
+    def get_email_body(self, b):
+        body = ""
+        if b.is_multipart():
+            for part in b.walk():
+                ctype = part.get_content_type()
+                cdispo = str(part.get('Content-Disposition'))
+
+                # skip any text/plain (txt) attachments
+                if ctype == 'text/plain' and 'attachment' not in cdispo:
+                    body = part.get_payload(decode=True)  # decode
+                    break
+        # not multipart - i.e. plain text, no attachments, keeping fingers crossed
+        else:
+            body = b.get_payload(decode=True)
+        return body
 
 if __name__ == '__main__':
-    get_from_gmail()
+    mail = Email()
+    mail.get_from_gmail()
+

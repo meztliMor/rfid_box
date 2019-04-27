@@ -10,7 +10,7 @@ import time
 import re
 
 import buttons
-import read_email as email
+from read_email import Email
 import i2c_lcd
 #from ../denis_lcd/RPi_I2C_driver as i2c_lcd
 
@@ -274,6 +274,7 @@ def email_loop(board):
     poll_interval = 20
     log.debug("start email loop")
     # TODO: add graceful termination
+    email = Email()
     while True:
         #log.debug("check email")
         result = email.get_from_gmail()
