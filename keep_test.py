@@ -13,19 +13,39 @@ class Keep(object):
         self.k.login(em.cfg.from_email, em.cfg.from_pwd)
         self.t_label = self.find_create_label(TODO_label)
         self.d_label = self.find_create_label(DONE_label)
+        self.red = gk.node.ColorValue.Red
+        self.green = gk.node.ColorValue.Green
 
-    def create_note(self, title, text="", label=None):
+    def create_note(self, title, text="", label=None, color=None):
+        if label is None:
+            label = self.t_label
         note = self.k.createNote(title, text)
-
         #note.pinned = True
-        note.color = gk.node.ColorValue.Red
+
+        if color is None:
+            color = gk.node.ColorValue.Red
+        note.color = color
+
         if label:
             note.labels.add(label)
 
         print note.title
         print note.text
         # TODO: should the sync be done here?
+        self.k.sync()
         return note
+
+    def delete_note(self, id):
+        note = self.k.get(id)
+        if note:
+            note.delete()
+            # TODO: should the sync be done here?
+
+    def delete_all(self):
+        for n in self.k.all():
+            n.delete()
+        # TODO: should the sync be done here?
+        self.k.sync()
 
     def find_by_label(self, label):
         notes = []
@@ -43,6 +63,10 @@ class Keep(object):
                 print "found match - ", n.title, title
                 res.append(n)
         return res
+
+    def find_create(self, label, title):
+        #notefind_notes(label, title)
+        pass
 
     def find_create_label(self, name):
         label = self.k.findLabel(name)

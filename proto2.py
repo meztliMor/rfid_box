@@ -13,6 +13,7 @@ import buttons
 from read_email import Email
 import i2c_lcd
 #from ../denis_lcd/RPi_I2C_driver as i2c_lcd
+from keep_test import Keep as Keep
 
 import logging
 LOG_FORMAT = "%(process)d %(levelname)s:%(name)s:%(funcName)s %(message)s"
@@ -59,14 +60,16 @@ class Comms(object):
 class Board(object):
     def __init__(self):
         # TODO probably need two mutexes
-        self.staging_q = {}
         self.todo_q = {}
         self.done_q = {}
+        # TODO: this needs to be dumped to file or fetched from keep
+        self.keep_q = {}
+
+        self.keep = Keep(Email())
 
         #TODO add basket to the file dump
         self.basket = sm_manager.list()
-        #self.queue_list = ["todo_q", "done_q", "staging_q", "basket"]
-        self.queue_list = ["todo_q", "done_q", "staging_q"]
+        self.queue_list = ["todo_q", "done_q", "keep_q"]
         self.q_mutex = Lock()
         self.comms = Comms()
         self.dump_path = "queue_dump.json"
@@ -76,7 +79,7 @@ class Board(object):
     def __str__(self):
         #TODO: mutex for basket - check if it doesnt deadlock with mutex
         #with self.q_mutex:
-        return "Board(todo_q:{q1}, done_q{q2}, staging_q{q3}, basket{s1})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), q3=json.dumps(self.staging_q), l1=json.dumps(self.basket))
+        return "Board(todo_q:{q1}, done_q{q2}, basket{s1})".format(q1=json.dumps(self.todo_q), q2=json.dumps(self.done_q), l1=json.dumps(self.basket))
 
     def add_to_basket(self, tasks):
         clean_tasks = [x.strip() for x in tasks]
@@ -140,23 +143,51 @@ class Board(object):
         elif self.done_q.get(key):
             log.debug("In DONE")
             self.mark_todo(key)
-        #elif self.staging_q.get(key): #TODO: remove staging queue
-        #    print "In the staging"
-        #    print self.staging_q[key]
         else: #ignore
             log.debug("ignoring new tag")
             self.comms.show_text(["Empty tag", "Press btn to add"])
         
         return True # wait for the removal of tag
 
+    # FIXME: holding mutex for too long?
     def _add_to_todo(self, key, tag):
         log.debug("tag: %s", tag)
         val = copy.deepcopy(tag.ndef.records[0].text)
+        # TODO: check if in other queue and delete
         self.todo_q[key] = val 
-        self.save_state()
         log.debug("\t{d}: {v} - create TODO".format(d=key, v=val))
+
+        self._add_to_keep(key, val)
+        self.save_state()
+
         #TODO: should not this be called when mutex is unlocked?
         self.comms.show_text([val, "TODO"])
+
+    def _add_to_keep(self, key, val, label=None, color=None):
+        if label is None:
+            label = self.keep.t_label
+
+        log.debug("create note")
+        note = self.keep.create_note(val, label=label, color=color)
+        self.keep_q[key] = note.id
+
+    #TODO: move bulk create to Keep
+    def save_all_to_keep(self):
+        # would be better to sync only once rather than after each
+        for k, v in self.todo_q.iteritems():
+            self._add_to_keep(k, v)
+
+        for k, v in self.done_q.iteritems():
+            self._add_to_keep(k, v, self.keep.d_label, self.keep.green)
+
+    def clear_orphans_keep(self):
+        # clear orphans
+        ids = self.keep_q.viewitems()
+        print ids
+        #for n in self.keep.k.all():
+        #    if n.id not in ids:
+        #        n.delete()
+        #self.keep.k.sync()
 
     def _move_item(self, key, queue_a, queue_b):
         # TODO: should it check for duplicates? and missing values?
@@ -169,6 +200,16 @@ class Board(object):
         with self.q_mutex:
             val = self._move_item(key, self.todo_q, self.done_q)
         self.comms.show_text([val, "DONE"])
+
+        # TODO: update keep
+        #notes = self.keep.find_notes(self.keep.d_label, val)
+        #self.keep.to_done(notes)
+
+        # FIXME: assert here or something
+        id = self.keep_q[key]
+        note = self.keep.k.get(id)
+        self.keep.to_done([note])
+
         log.debug("\t{d}: {v} - DONE".format(d=key, v=val))
 
     def mark_todo(self, key):
@@ -176,6 +217,14 @@ class Board(object):
         with self.q_mutex:
             val = self._move_item(key, self.done_q, self.todo_q)
         self.comms.show_text([val, "TODO"])
+        # TODO: update keep
+        #notes = self.keep.find_notes(self.keep.t_label, val)
+        #self.keep.to_todo(notes)
+
+        id = self.keep_q[key]
+        note = self.keep.k.get(id)
+        self.keep.to_todo([note])
+
         log.debug("\t{d}: {v} - TODO".format(d=key, v=val))
 
     def _delete_task(self, key):
@@ -184,7 +233,11 @@ class Board(object):
                 del d[key]
         delitem(self.todo_q, key)
         delitem(self.done_q, key)
-        delitem(self.staging_q, key)
+        
+        to_delete = self.keep_q.pop(key, None)
+        if to_delete is not None: 
+            self.keep.delete_note(to_delete)
+
         #self.save_state()
 
     def create_task(self, key, tag):
@@ -197,7 +250,8 @@ class Board(object):
                 if self._write_tag(tag):
                     # does it ever change?
                     #print "Has changed", tag.ndef.has_changed
-                    self._add_to_todo(key,tag)
+                    self._add_to_todo(key, tag)
+
             else:
                 log.debug("cannot create task from empty basket")
 
@@ -361,9 +415,20 @@ def run():
         buttons.cleanup()
 
 if __name__ == "__main__":
-    # FIXME: use this to handl SIGINT
+    # TODO: add argparser
+    # FIXME: handle SIGINT ??
     if 1:
         run()
+    elif 0:
+        board = Board()
+        board.load_state()
+        board.save_all_to_keep()
+        board.clear_orphans_keep()
+        board.save_state()
+    elif 0:
+        board = Board()
+        board.keep.delete_all()
+
     else: # test email loop
         board = Board()
         board.load_state()
