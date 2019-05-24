@@ -1,0 +1,7 @@
+[email]
+# replace <> with actual date
+org_email   = <@mail.com>
+from_email  = <mail@mail.com>
+from_pwd    = <password>
+smtp_server = <imap.mail.com>
+smtp_port   = <993>
