@@ -11,8 +11,7 @@ import re
 
 import buttons
 from read_email import Email
-import i2c_lcd
-#from ../denis_lcd/RPi_I2C_driver as i2c_lcd
+import RPi_I2C_driver as i2c_lcd
 from keep_test import Keep as Keep
 
 import logging
