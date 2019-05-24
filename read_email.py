@@ -1,17 +1,10 @@
-# https://codehandbook.org/how-to-read-email-from-gmail-using-python/
+# Some code is taken from https://codehandbook.org/how-to-read-email-from-gmail-using-python/
 import smtplib
 import time
 import imaplib
 import email
 
 import ConfigParser, os
-
-# FIXME: move these to a config file - use configparser
-#ORG_EMAIL   = "***REMOVED***"
-#FROM_EMAIL  = "***REMOVED***" + ORG_EMAIL
-#FROM_PWD    = "***REMOVED***"
-#SMTP_SERVER = "***REMOVED***"
-#SMTP_PORT   = 993
 
 class ConfigStruct:
     #https://stackoverflow.com/questions/1305532/convert-nested-python-dict-to-object
