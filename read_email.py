@@ -1,4 +1,4 @@
-# Some code is taken from https://codehandbook.org/how-to-read-email-from-gmail-using-python/
+# Code from https://codehandbook.org/how-to-read-email-from-gmail-using-python/
 import smtplib
 import time
 import imaplib
