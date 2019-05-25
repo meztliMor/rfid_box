@@ -1,6 +1,6 @@
 import gkeepapi as gk
 import ConfigParser, os
-from read_email import Email as Email
+from email_client import Email as Email
 import pdb
 
 #TODO: move to Keep    

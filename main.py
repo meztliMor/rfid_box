@@ -10,7 +10,7 @@ import time
 import re
 
 import buttons
-from read_email import Email
+from email_client import Email
 import RPi_I2C_driver as i2c_lcd
 from keep_client import Keep as Keep
 
