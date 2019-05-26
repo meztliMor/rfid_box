@@ -3,11 +3,11 @@ import json
 import nfc
 import ndef
 import nfc.ndef
-
 from multiprocessing import Process, Lock, Queue, Event, Manager
 from Queue import Empty as QueueEmpty
 import time
 import re
+import argparse
 
 import buttons
 from email_client import Email
@@ -19,8 +19,8 @@ LOG_FORMAT = "%(process)d %(levelname)s:%(name)s:%(funcName)s %(message)s"
 logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
 log = logging.getLogger(__name__)
 
-import pdb
-import traceback
+#import pdb
+#import traceback
 
 # should move to main?
 sm_manager = Manager()
@@ -414,21 +414,27 @@ def run():
         buttons.cleanup()
 
 if __name__ == "__main__":
-    # TODO: add argparser
     # FIXME: handle SIGINT ??
-    if 1:
+
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    mg = parser.add_mutually_exclusive_group()
+    mg.add_argument("--main", default=True, action="store_true", help="Default mode that launches the main program.")
+    mg.add_argument("--dbg-email", action="store_true")
+    mg.add_argument("--clear-keep", action="store_true")
+    mg.add_argument("--save-to-keep", action="store_true")
+    args = parser.parse_args()
+    if args.main:
         run()
-    elif 0:
+    elif args.save_to_keep:
         board = Board()
         board.load_state()
         board.save_all_to_keep()
         board.clear_orphans_keep()
         board.save_state()
-    elif 0:
+    elif args.clear_keep:
         board = Board()
         board.keep.delete_all()
-
-    else: # test email loop
+    elif args.dbg_email: # test email loop
         board = Board()
         board.load_state()
         email_loop(board)
