@@ -1,0 +1,8 @@
+*.swn
+*.swm
+*.swo
+*.swp
+*.pyc
+*.bak
+*.cfg
+*.json
